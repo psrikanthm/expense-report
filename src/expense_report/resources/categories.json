@@ -97,6 +97,7 @@
             "wise",
             "interac",
             "wealthsimple"
-        ]
+        ],
+        "report_excluded": true
     }
 ]

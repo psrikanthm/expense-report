@@ -13,13 +13,15 @@ def _get_paths(base_dir: str):
     return {
         "sources": os.path.join(base_dir, "sources"),
         "intermediate": os.path.join(base_dir, "intermediate"),
-        "output": os.path.join(base_dir, "output")
+        "output": os.path.join(base_dir, "output"),
+        "reports": os.path.join(base_dir, "reports")
     }
 
 def _ensure_directories(base_dir: str):
     paths = _get_paths(base_dir)
     os.makedirs(paths["intermediate"], exist_ok=True)
     os.makedirs(paths["output"], exist_ok=True)
+    os.makedirs(paths["reports"], exist_ok=True)
     return paths
 
 def run_parse(month: str, base_dir: str = DEFAULT_BASE_DIR) -> str:
@@ -61,8 +63,18 @@ def run_parse(month: str, base_dir: str = DEFAULT_BASE_DIR) -> str:
         })
     
     df = pd.DataFrame(data)
+    
+    # Deduplicate transactions based on date, description, and amount
+    # This ensures we don't have repeat entries if we re-parse or have partial overlaps
+    original_count = len(df)
+    df = df.drop_duplicates(subset=['date', 'description', 'amount'], keep='first')
+    deduped_count = len(df)
+    
+    if original_count != deduped_count:
+        print(f"Removed {original_count - deduped_count} duplicate transactions (from {original_count} to {deduped_count})")
+    
     df.to_csv(output_file, index=False)
-    print(f"Saved {len(all_transactions)} transactions to {output_file}")
+    print(f"Saved {deduped_count} transactions to {output_file}")
     return output_file
 
 def run_categorize(month: str, base_dir: str = DEFAULT_BASE_DIR) -> str:
@@ -138,41 +150,148 @@ def _load_categorized_transactions(file_path: str) -> List[CategorizedTransactio
         transactions.append(t)
     return transactions
 
-def run_report(month: str, base_dir: str = DEFAULT_BASE_DIR) -> str:
+def run_aggregate(month: str, base_dir: str = DEFAULT_BASE_DIR) -> str:
     """
-    Reads categorized_{month}.csv and generates reports/report_{month}.pdf
-    Also loads past 11 months of data if available for trend analysis.
+    Reads categorized transactions, filters excluded categories, aggregates spend by category,
+    and saves to {base_dir}/output/monthly_{month}.csv.
     """
     paths = _ensure_directories(base_dir)
     intermediate_dir = paths["intermediate"]
+    # Ensure output directory exists (previously gold)
     output_dir = paths["output"]
+    os.makedirs(output_dir, exist_ok=True)
     
     input_file = os.path.join(intermediate_dir, f"categorized_{month}.csv")
     if not os.path.exists(input_file):
         raise FileNotFoundError(f"Input file {input_file} not found. Run categorize first.")
         
-    print(f"Generating report from {input_file} for month {month}...")
+    print(f"Generating monthly report data from {input_file}...")
     
-    # Load current month transactions
-    all_transactions = _load_categorized_transactions(input_file)
+    # Load excluded categories config
+    from .models import _load_categories
+    categories_data = _load_categories()
+    excluded_categories = {
+        cat['name'].upper() 
+        for cat in categories_data 
+        if cat.get('report_excluded', False)
+    }
     
-    # Load previous 11 months
+    df = pd.read_csv(input_file)
+    original_count = len(df)
+    
+    # Safety Check: Deduplicate again just in case intermediate file has issues
+    df = df.drop_duplicates(subset=['date', 'description', 'amount'], keep='first')
+    deduped_count = len(df)
+    
+    if original_count != deduped_count:
+        print(f"Safety Check: Removed {original_count - deduped_count} duplicate transactions in monthly-data step")
+
+    # Filter excluded categories
+    # Normalize category column to uppercase for comparison
+    df['category_upper'] = df['category'].str.upper()
+    df_filtered = df[~df['category_upper'].isin(excluded_categories)].copy()
+    filtered_count = len(df_filtered)
+    
+    # Filter out -ve amounts    
+    df_filtered = df_filtered[df_filtered['amount'] > 0]
+    filtered_count = len(df_filtered)
+
+    if original_count != filtered_count:
+        print(f"Filtered out {original_count - filtered_count} transactions from excluded categories: {excluded_categories}")
+    
+    # Aggregate by category
+    # Group by category (using original casing from first occurrence or consistently upper/title)
+    # We'll stick to the category column value
+    aggregates = df_filtered.groupby('category')['amount'].sum().reset_index()
+    
+    output_file = os.path.join(output_dir, f"monthly_{month}.csv")
+    aggregates.to_csv(output_file, index=False)
+    
+    print(f"Saved monthly aggregates to {output_file}")
+    return output_file
+
+def run_render_pdf(month: str, base_dir: str = DEFAULT_BASE_DIR) -> str:
+    """
+    Reads output/monthly_{month}.csv (aggregates) and intermediate/categorized_{month}.csv (details).
+    Generates reports/report_{month}.pdf calling the generator.
+    Also loads past 11 months of data from gold layer for trend analysis.
+    """
+    paths = _ensure_directories(base_dir)
+    intermediate_dir = paths["intermediate"]
+    output_dir = paths["output"] # contains aggregates
+    reports_dir = paths["reports"] # contains PDFs
+
+    
+    # 1. Load Current Month Aggregates
+    gold_file = os.path.join(output_dir, f"monthly_{month}.csv")
+    if not os.path.exists(gold_file):
+        raise FileNotFoundError(f"Gold file {gold_file} not found. Run aggregate first.")
+    
+    print(f"Loading current month aggregates from {gold_file}")
+    current_aggregates = pd.read_csv(gold_file)
+    current_aggregates['date'] = pd.to_datetime(f"{month}-01") # Dummy date for plotting if needed, usage depends on reports.py
+    # Actually, reports might expect a 'month_str' or similar. Let's see how we adapt reports.py.
+    # For now, let's keep it simple.
+    
+    # 2. Load Historical Aggregates
+    all_aggregates = [current_aggregates]
     target_date = pd.to_datetime(f"{month}-01")
+    
     for i in range(1, 12):
         prev_date = target_date - pd.DateOffset(months=i)
         prev_month_str = prev_date.strftime("%Y-%m")
-        prev_file = os.path.join(intermediate_dir, f"categorized_{prev_month_str}.csv")
+        prev_gold_file = os.path.join(output_dir, f"monthly_{prev_month_str}.csv")
         
-        if os.path.exists(prev_file):
-            print(f"Loading historical data from {prev_file}")
-            hist_transactions = _load_categorized_transactions(prev_file)
-            all_transactions.extend(hist_transactions)
+        if os.path.exists(prev_gold_file):
+            # print(f"Loading historical data from {prev_gold_file}")
+            hist_df = pd.read_csv(prev_gold_file)
+            hist_df['date'] = prev_date # Assign the month date to these rows
+            all_aggregates.append(hist_df)
+            
+    full_history_aggregates = pd.concat(all_aggregates, ignore_index=True)
 
+    # 3. Load Current Month Details (Line-by-line)
+    input_file = os.path.join(intermediate_dir, f"categorized_{month}.csv")
+    if not os.path.exists(input_file):
+         raise FileNotFoundError(f"Input file {input_file} not found. Run categorize first.")
+
+    print(f"Loading transaction details from {input_file}...")
+    # We still need to filter these details to match the gold aggregates (remove report_excluded)
+    # so the table doesn't show stuff that isn't in the charts.
+    
+    from .models import _load_categories
+    categories_data = _load_categories()
+    excluded_categories = {
+        cat['name'].upper() 
+        for cat in categories_data 
+        if cat.get('report_excluded', False)
+    }
+    
+    details_df = pd.read_csv(input_file)
+    details_df['category_upper'] = details_df['category'].str.upper()
+    filtered_details_df = details_df[~details_df['category_upper'].isin(excluded_categories)].copy()
+    
+    # Convert filtered details back to list of objects or just pass DF if we update reports.py
+    # reports.py expects List[CategorizedTransaction]. Let's adapt reports.py to take DF or we reconstruct objects.
+    # Reconstructing objects for now to minimize reports.py signature changes unless we decided to change it deep.
+    # The plan said: "Update generate_report signature to accept current_aggregates, historical_aggregates, and transaction_details"
+    
     from .reports import ReportGenerator
-    generator = ReportGenerator(output_dir=output_dir)
-    report_path = generator.generate_report(all_transactions, month)
+    generator = ReportGenerator(output_dir=reports_dir)
+    
+    # converting filtered_details_df to a list of CategorizedTransaction for backward compatibility 
+    # OR we follow the plan and update ReportGenerator.
+    # Let's update ReportGenerator. So here we pass DFs.
+    
+    report_path = generator.generate_report(
+        current_aggregates=current_aggregates,
+        historical_aggregates=full_history_aggregates,
+        transaction_details=filtered_details_df,
+        month=month
+    )
+    
     if not report_path:
-        report_path = os.path.join(output_dir, f"report_{month}.pdf")
+        report_path = os.path.join(reports_dir, f"report_{month}.pdf")
     
     print(f"Report generated at {report_path}")
     return report_path
@@ -182,9 +301,9 @@ def run_email(month: str, dryrun: bool = False, base_dir: str = DEFAULT_BASE_DIR
     Sends the report email.
     """
     paths = _get_paths(base_dir)
-    output_dir = paths["output"]
+    reports_dir = paths["reports"]
     
-    report_path = os.path.join(output_dir, f"report_{month}.pdf")
+    report_path = os.path.join(reports_dir, f"report_{month}.pdf")
     if not os.path.exists(report_path):
         raise FileNotFoundError(f"Report not found at {report_path}. Run report generation first.")
         
@@ -203,13 +322,14 @@ def run_email(month: str, dryrun: bool = False, base_dir: str = DEFAULT_BASE_DIR
     client = SESClient()
     client.send_email(to=recipients, subject=subject, text=text, attachment_path=report_path, dryrun=dryrun)
 
-def run_monthly_workflow(month: str, dryrun: bool = False, base_dir: str = DEFAULT_BASE_DIR):
+def run_full_workflow(month: str, dryrun: bool = False, base_dir: str = DEFAULT_BASE_DIR):
     """
     Orchestrates the full monthly workflow.
     """
     print(f"Starting monthly workflow for {month} in {base_dir}...")
     run_parse(month, base_dir=base_dir)
     run_categorize(month, base_dir=base_dir)
-    run_report(month, base_dir=base_dir)
+    run_aggregate(month, base_dir=base_dir)
+    run_render_pdf(month, base_dir=base_dir)
     run_email(month, dryrun=dryrun, base_dir=base_dir)
     print("Monthly workflow completed successfully.")

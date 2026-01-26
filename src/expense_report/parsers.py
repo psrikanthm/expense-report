@@ -34,17 +34,18 @@ class AmexParser(Parser):
             description = row.get('Description')
             amount = row.get('Amount')
             
-            if date_str and description and pd.notna(amount):
+            if date_str and pd.notna(amount):
                 try:
                     # Amex date format: "28 Dec 2025"
                     trans_date = datetime.strptime(str(date_str), '%d %b %Y').date()
-                    # Amex: Positive is expense (usually)
-                    # Use provided amount as is, assuming positive = expense found in docs
-                    transactions.append(Transaction(
-                        date=trans_date,
-                        description=str(description),
-                        amount=float(amount)
-                    ))
+                    # Amex: Positive amount is expense
+
+                    if amount > 0:
+                        transactions.append(Transaction(
+                            date=trans_date,
+                            description=str(description),
+                            amount=float(amount)
+                        ))
                 except ValueError as e:
                     print(f"Skipping invalid row in Amex: {row} - {e}")
                     continue
@@ -62,7 +63,7 @@ class CibcParser(Parser):
             debit = row.get('Debit')
             credit = row.get('Credit')
             
-            if date_str and description:
+            if date_str:
                 try:
                     # CIBC date format: "2026-01-02" (ISO)
                     trans_date = datetime.strptime(str(date_str), '%Y-%m-%d').date()
@@ -72,17 +73,20 @@ class CibcParser(Parser):
                         amount = float(debit) # Debit is expense -> positive
                     elif pd.notna(credit) and str(credit).strip():
                         amount = -float(credit) # Credit is payment/refund -> negative
+                    else:
+                        # skipping credit rows = no expense
+                        continue
                     
-                    # Store transaction
-                    transactions.append(Transaction(
-                        date=trans_date,
-                        description=str(description),
-                        amount=amount
-                    ))
+                    if amount > 0:
+                        # Store transaction
+                        transactions.append(Transaction(
+                            date=trans_date,
+                            description=str(description),
+                            amount=amount
+                        ))
                 except ValueError as e:
                     print(f"Skipping invalid row in CIBC: {row} - {e}")
                     continue
-                    
         return self._filter_by_month(transactions, month)
 
 class ScotiaParser(Parser):
@@ -111,11 +115,12 @@ class ScotiaParser(Parser):
                     # Requirement: Convert to positive for expense.
                     amount = -float(amount_val)
                     
-                    transactions.append(Transaction(
-                        date=trans_date,
-                        description=full_desc,
-                        amount=amount
-                    ))
+                    if amount > 0:
+                        transactions.append(Transaction(
+                            date=trans_date,
+                            description=full_desc,
+                            amount=amount
+                        ))
                 except ValueError as e:
                     print(f"Skipping invalid row in Scotia: {row} - {e}")
                     continue

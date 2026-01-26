@@ -69,16 +69,17 @@ Required environment variables:
 
 ### Directory Structure
 
-```
 docs/
-├── sources/           # Raw transaction files from banks (append new data here)
+├── sources/           # Raw transaction files from banks, append new data here (Bronze Layer)
 │   ├── amex.csv
 │   ├── cibc.csv
 │   └── scotia.csv
-├── intermediate/      # Parsed and categorized files (auto-generated)
+├── intermediate/      # Parsed and categorized files (Silver Layer)
 │   ├── transactions_YYYY-MM.csv
 │   └── categorized_YYYY-MM.csv
-└── output/            # Generated reports
+├── output/            # Definitive monthly aggregates (Gold Layer)
+│   └── monthly_YYYY-MM.csv
+└── reports/           # Generated PDF reports
     └── report_YYYY-MM.pdf
 ```
 
@@ -122,12 +123,20 @@ Apply keyword and LLM-based categorization:
 uv run expense-report categorize -m 2026-01
 ```
 
+### Generate Monthly Data
+
+Filter transactions and create definitive monthly aggregates (Gold Layer):
+
+```bash
+uv run expense-report aggregate -m 2026-01
+```
+
 ### Generate Report
 
 Create a PDF report with spending breakdown and trends:
 
 ```bash
-uv run expense-report generate-report -m 2026-01
+uv run expense-report render-pdf -m 2026-01
 ```
 
 ### Send Email
@@ -140,16 +149,16 @@ uv run expense-report send-email -m 2026-01
 # Test without sending
 uv run expense-report send-email -m 2026-01 --dryrun
 ```
-
+Even though we use AWS SES for sending emails, any SMTP server can be used by setting the environment variables.
 ### Full Monthly Workflow
 
-Run all steps in sequence (parse → categorize → report → email):
+Run all steps in sequence (parse → categorize → monthly-data → report → email):
 
 ```bash
-uv run expense-report monthly-report -m 2026-01
+uv run expense-report run -m 2026-01
 
 # With email dry-run
-uv run expense-report monthly-report -m 2026-01 --dryrun
+uv run expense-report run -m 2026-01 --dryrun
 ```
 
 ## Monthly Workflow
@@ -161,9 +170,9 @@ Run this workflow at the beginning of each month for the previous month's data:
 3. **Make sure LM Studio is running** with a loaded model
 4. **Run the full workflow**:
    ```bash
-   uv run expense-report monthly-report -m YYYY-MM
+   uv run expense-report run -m YYYY-MM
    ```
-5. **Review the report** at `docs/output/report_YYYY-MM.pdf`
+5. **Review the report** at `docs/reports/report_YYYY-MM.pdf`
 
 ## Customizing Categories
 

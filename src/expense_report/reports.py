@@ -9,10 +9,6 @@ import os
 import json
 from .models import CategorizedTransaction, CategoryEnum
 
-# Categories to exclude from the report
-EXCLUDED_CATEGORIES = [
-    CategoryEnum.TRANSFER,
-]
 
 class PDFReport(FPDF):
     def header(self):
@@ -30,36 +26,26 @@ class ReportGenerator:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def generate_report(self, transactions: List[CategorizedTransaction], month: str):
+    def generate_report(self, 
+                        current_aggregates: pd.DataFrame, 
+                        historical_aggregates: pd.DataFrame, 
+                        transaction_details: pd.DataFrame, 
+                        month: str):
         """
-        Generates a PDF report for the given month.
+        Generates a PDF report for the given month using pre-aggregated data.
+        
+        current_aggregates: DataFrame with columns ['category', 'amount'] (and potentially date/month related cols)
+        historical_aggregates: DataFrame with columns ['category', 'amount', 'date'] (containing approx 12 months)
+        transaction_details: DataFrame containing filtered line-item transactions for the current month.
         month: str in 'YYYY-MM' format.
         """
-        # Convert transactions to DataFrame for easier manipulation
-        df = pd.DataFrame([t.to_dict() for t in transactions])
-        df['date'] = pd.to_datetime(df['date'])
         
-        # De-duplicate transactions based on (date, description, amount)
-        original_count = len(df)
-        df = df.drop_duplicates(subset=['date', 'description', 'amount'], keep='first')
-        deduped_count = len(df)
-        if original_count != deduped_count:
-            print(f"Removed {original_count - deduped_count} duplicate transactions")
+        if current_aggregates.empty:
+            print(f"No aggregated data found for {month}")
+            # We might still want to generate an empty report or return
+            # But let's check details too
         
-        # Filter out excluded categories defined in EXCLUDED_CATEGORIES
-        if EXCLUDED_CATEGORIES:
-            exclude_values = {c.value.lower() for c in EXCLUDED_CATEGORIES}
-            df = df[~df['category'].apply(lambda x: str(x).lower() in exclude_values)]
-        
-        # Filter for the target month
-        # Assuming input month is 'YYYY-MM'
-        target_date = pd.to_datetime(f"{month}-01")
-        current_month_df = df[
-            (df['date'].dt.year == target_date.year) & 
-            (df['date'].dt.month == target_date.month)
-        ]
-        
-        if current_month_df.empty:
+        if transaction_details.empty:
             print(f"No transactions found for {month}")
             return
 
@@ -70,23 +56,35 @@ class ReportGenerator:
         pdf.add_page()
         
         # 1. Spend Summary
-        self._add_spend_summary(pdf, current_month_df, month)
+        self._add_spend_summary(pdf, current_aggregates, month)
         
         # 2. Spend by Category (Pie Chart)
-        self._add_category_pie_chart(pdf, current_month_df)
+        self._add_category_pie_chart(pdf, current_aggregates)
         
         # 3. Last 12 Months Spend (Bar Chart)
-        self._add_monthly_trend_chart(pdf, df, target_date)
+        # Verify historical_aggregates has date or month_str
+        if 'date' in historical_aggregates.columns:
+            # Ensure it works for plotting
+             historical_aggregates['date'] = pd.to_datetime(historical_aggregates['date'])
+        
+        target_date = pd.to_datetime(f"{month}-01")
+        self._add_monthly_trend_chart(pdf, historical_aggregates, target_date)
         
         # 4. Transaction Details
-        self._add_transaction_table(pdf, current_month_df)
+        self._add_transaction_table(pdf, transaction_details)
         
         pdf.output(str(report_path))
         print(f"Report generated: {report_path}")
+        return report_path
 
-    def _add_spend_summary(self, pdf: PDFReport, df: pd.DataFrame, month: str):
-        total_spend = df[df['amount'] > 0]['amount'].sum()
-
+    def _add_spend_summary(self, pdf: PDFReport, aggregates: pd.DataFrame, month: str):
+        # aggregates has 'amount'. Sum positive amounts? 
+        # Usually aggregates are already sums. If they are net sums, we just sum them.
+        # If we want total "spend" we might want to ignore negative aggregates (refunds/income)?
+        # For simplicity, assuming aggregates represent net spend per category.
+        
+        total_spend = aggregates['amount'].sum()
+        
         pdf.set_font('helvetica', 'B', 12)
         pdf.cell(0, 10, f"Spend Summary for {month}", ln=True)
         
@@ -94,60 +92,71 @@ class ReportGenerator:
         pdf.cell(0, 8, f"Total Spend: ${total_spend:.2f}", ln=True)
         pdf.ln(10)
 
-    def _add_category_pie_chart(self, pdf: PDFReport, df: pd.DataFrame):
+    def _add_category_pie_chart(self, pdf: PDFReport, aggregates: pd.DataFrame):
         pdf.set_font('helvetica', 'B', 12)
         pdf.cell(0, 10, "Spend by Category", ln=True)
 
-        # Aggregate by category
-        cat_spend = df[df['amount'] > 0].groupby('category')['amount'].sum().reset_index()
-        cat_spend['percentage'] = cat_spend['amount'] / cat_spend['amount'].sum() * 100
+        # Filter out zero or negative speds for Pie Chart to look nice
+        # usage of copy() to avoid SettingWithCopyWarning if it's a view
+        cat_spend = aggregates[aggregates['amount'] > 0].copy()
         
-        # Create Pie Chart
-        fig = px.pie(cat_spend, values='amount', names='category', 
-                     title='Spend by Category',
-                     hover_data=['percentage'], 
-                     labels={'amount':'Amount'})
-        fig.update_traces(textposition='inside', texttemplate='%{label}<br>$%{value:.2f}<br>%{percent}')
-        
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-            fig.write_image(tmp.name, scale=4)
-            pdf.image(tmp.name, w=180)
-            os.unlink(tmp.name)
+        if cat_spend.empty:
+             pdf.cell(0, 10, "No positive spend to display.", ln=True)
+             pass
+        else:
+            cat_spend['percentage'] = cat_spend['amount'] / cat_spend['amount'].sum() * 100
+            
+            # Create Pie Chart
+            fig = px.pie(cat_spend, values='amount', names='category', 
+                         title='Spend by Category',
+                         hover_data=['percentage'], 
+                         labels={'amount':'Amount'})
+            fig.update_traces(textposition='inside', texttemplate='%{label}<br>$%{value:.2f}<br>%{percent}')
+            
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                fig.write_image(tmp.name, scale=4)
+                pdf.image(tmp.name, w=180)
+                os.unlink(tmp.name)
         
         pdf.ln(10)
 
-    def _add_monthly_trend_chart(self, pdf: PDFReport, full_df: pd.DataFrame, target_date: pd.Timestamp):
+    def _add_monthly_trend_chart(self, pdf: PDFReport, hist_df: pd.DataFrame, target_date: pd.Timestamp):
         pdf.add_page()
         pdf.set_font('helvetica', 'B', 12)
         pdf.cell(0, 10, "Last 12 Months Spend Trend", ln=True)
 
-        # Filter last 12 months
+        if hist_df.empty:
+             pdf.cell(0, 10, "No historical data available.", ln=True)
+             return
+
+        # hist_df should have 'date', 'category', 'amount'
+        # Filter (already done in jobs.py mostly, but good to ensure range)
         end_date = target_date + pd.offsets.MonthEnd(0)
         start_date = end_date - pd.DateOffset(months=11)
         start_date = start_date.replace(day=1)
         
-        trend_df = full_df[
-            (full_df['date'] >= start_date) & 
-            (full_df['date'] <= end_date) &
-            (full_df['amount'] > 0) # Only consider positive spend
+        trend_df = hist_df[
+            (hist_df['date'] >= start_date) & 
+            (hist_df['date'] <= end_date) &
+            (hist_df['amount'] > 0) # Only consider positive spend
         ].copy()
         
+        if trend_df.empty:
+             pdf.cell(0, 10, "No positive spend trend data available.", ln=True)
+             return
+
         # Group by month and category
-        # Using string format for month to make plotting easier
         trend_df['month_str'] = trend_df['date'].dt.strftime('%Y-%m')
         
         # Calculate total spend per category for sorting
         category_totals = trend_df.groupby('category')['amount'].sum().sort_values(ascending=False)
         sorted_categories = category_totals.index.tolist()
         
+        # It's already aggregated by category per month (mostly), but creating a clean DF for Plotly
         monthly_cat_spend = trend_df.groupby(['month_str', 'category'])['amount'].sum().reset_index()
         
         # Format the amount as dollar values for bar labels
         monthly_cat_spend['amount_label'] = monthly_cat_spend['amount'].apply(lambda x: f'${x:,.0f}')
-        
-        # Sort the dataframe so that the legend order matches the stack order (roughly)
-        # Plotly Express stacks from bottom up based on the order in category_orders if provided.
-        # We want High Spend -> Bottom. So first in list = Bottom.
         
         fig = px.bar(monthly_cat_spend, x='month_str', y='amount', color='category', 
                      text='amount_label',
@@ -171,6 +180,7 @@ class ReportGenerator:
         pdf.set_font('helvetica', '', 9)
         
         try:
+            # We can't import models dynamically easily if circle dep, using resource file directly is safe
             categories_path = Path(__file__).parent / "resources/categories.json"
             with open(categories_path, 'r') as f:
                 categories_data = json.load(f)
@@ -209,6 +219,10 @@ class ReportGenerator:
         # Table Rows
         pdf.set_font('helvetica', '', 7)
         
+        # Ensure date is datetime
+        if not pd.api.types.is_datetime64_any_dtype(df['date']):
+             df['date'] = pd.to_datetime(df['date'])
+        
         # Sort by category then date
         sorted_df = df.sort_values(by=['category', 'date'])
         
@@ -225,4 +239,5 @@ class ReportGenerator:
             pdf.cell(col_widths[2], 6, amount_str, border=1, align='R')
             pdf.cell(col_widths[3], 6, category, border=1)
             pdf.ln()
+
 

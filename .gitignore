@@ -19,9 +19,10 @@ ENV/
 .DS_Store
 
 # Statement files, processed and intermediate files
-docs/output/*.pdf
+docs/output/*.csv
 docs/intermediate/*.csv
 docs/sources/*.csv
+docs/reports/*.pdf
 
 # Pytest
 .pytest_cache/
