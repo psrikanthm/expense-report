@@ -68,7 +68,7 @@ Required environment variables:
 ## Data Files
 
 ### Directory Structure
-
+```
 docs/
 ├── sources/           # Raw transaction files from banks, append new data here (Bronze Layer)
 │   ├── amex.csv
