@@ -1,0 +1,31 @@
+# Environment variables (contains secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Statement files, processed and intermediate files
+docs/output/*.pdf
+docs/intermediate/*.csv
+docs/sources/*.csv
+
+# Pytest
+.pytest_cache/
+
+# Coverage
+htmlcov/
+.coverage

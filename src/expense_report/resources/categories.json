@@ -1,0 +1,102 @@
+[
+    {
+        "name": "amazon",
+        "description": "Purchases from Amazon",
+        "keywords": [
+            "amazon",
+            "amzn"
+        ]
+    },
+    {
+        "name": "groceries",
+        "description": "Purchases from supermarkets and grocery stores, related to food or every day essentials",
+        "keywords": [
+            "food basics",
+            "longos",
+            "sobeys",
+            "no frills",
+            "walmart"
+        ]
+    },
+    {
+        "name": "restaurants",
+        "description": "Dine-in or takeout from restaurants, cafes, bakeries, fast food places, etc.",
+        "keywords": [
+            "starbucks",
+            "cafe",
+            "coffee",
+            "tim hortons",
+            "bakery"
+        ]
+    },
+    {
+        "name": "utility",
+        "description": "Payments for utilities such as electricity, internet, phone bills, fees, public transit, health care, pharmacies, dental care, etc.",
+        "keywords": [
+            "oxio",
+            "rogers",
+            "membership fee installment",
+            "presto fare",
+            "health care",
+            "pharmacy",
+            "dental care"
+        ]
+    },
+    {
+        "name": "car",
+        "description": "Payments for car related expenses such as gas, parking, tolls, auto insurance, etc.",
+        "keywords": [
+            "petro canada",
+            "esso",
+            "shell",
+            "parking",
+            "loan payment"
+        ],
+        "rules": [
+            {
+                "keywords": [
+                    "security national"
+                ],
+                "min_amount": 200,
+                "max_amount": 500
+            }
+        ]
+    },
+    {
+        "name": "house",
+        "description": "Payments for house related expenses such as home maintenance, furniture, home insurance, etc.",
+        "keywords": [
+            "homne depot",
+            "rona",
+            "rmg mortgage",
+            "ajax taxes"
+        ],
+        "rules": [
+            {
+                "keywords": [
+                    "security national"
+                ],
+                "min_amount": 50,
+                "max_amount": 200
+            }
+        ]
+    },
+    {
+        "name": "leisure",
+        "description": "Transactions related to leisure and travel activities such as hotels, flights, tickets, streaming services, etc. This category is for non-essential purchases but doesn't include eating out.",
+        "keywords": [
+            "booking.com",
+            "airbnb",
+            "spotify"
+        ]
+    },
+    {
+        "name": "transfer",
+        "description": "Transfers between accounts",
+        "keywords": [
+            "wise",
+            "interac",
+            "wealthsimple"
+        ]
+    }
+]
