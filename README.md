@@ -95,7 +95,7 @@ After downloading transaction files from your bank accounts:
 tail -n +2 ~/Downloads/new_amex_export.csv >> docs/sources/amex.csv
 
 # For CIBC
-tail -n +2 ~/Downloads/new_cibc_export.csv >> docs/sources/cibc.csv
+cat ~/Downloads/new_cibc_export.csv >> docs/sources/cibc.csv
 
 # For Scotia  
 tail -n +2 ~/Downloads/new_scotia_export.csv >> docs/sources/scotia.csv
