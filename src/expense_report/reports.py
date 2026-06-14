@@ -70,7 +70,10 @@ class ReportGenerator:
         target_date = pd.to_datetime(f"{month}-01")
         self._add_monthly_trend_chart(pdf, historical_aggregates, target_date)
         
-        # 4. Transaction Details
+        # 4. Averages of Last 6 Months
+        self._add_six_month_averages(pdf, historical_aggregates, target_date)
+        
+        # 5. Transaction Details
         self._add_transaction_table(pdf, transaction_details)
         
         pdf.output(str(report_path))
@@ -239,5 +242,122 @@ class ReportGenerator:
             pdf.cell(col_widths[2], 6, amount_str, border=1, align='R')
             pdf.cell(col_widths[3], 6, category, border=1)
             pdf.ln()
+
+    def _add_six_month_averages(self, pdf: PDFReport, historical_aggregates: pd.DataFrame, target_date: pd.Timestamp):
+        pdf.add_page()
+        pdf.set_font('helvetica', 'B', 12)
+        pdf.cell(0, 10, "6-Month Average Spend by Category", ln=True)
+        
+        # Calculate dates
+        start_date = target_date - pd.DateOffset(months=5)
+        start_month_str = start_date.strftime('%Y-%m')
+        end_month_str = target_date.strftime('%Y-%m')
+        
+        pdf.set_font('helvetica', 'I', 9)
+        pdf.cell(0, 8, f"Historical monthly averages calculated from {start_month_str} to {end_month_str}", ln=True)
+        pdf.ln(5)
+
+        if historical_aggregates.empty:
+             pdf.set_font('helvetica', '', 10)
+             pdf.cell(0, 10, "No historical data available to compute averages.", ln=True)
+             return
+        
+        # Filter for last 6 months
+        hist_df = historical_aggregates.copy()
+        hist_df['date'] = pd.to_datetime(hist_df['date'])
+        
+        six_months_df = hist_df[
+            (hist_df['date'] >= start_date) & 
+            (hist_df['date'] <= target_date) &
+            (hist_df['amount'] > 0)
+        ].copy()
+        
+        if six_months_df.empty:
+             pdf.set_font('helvetica', '', 10)
+             pdf.cell(0, 10, "No positive spend data available in the last 6 months.", ln=True)
+             return
+             
+        # Calculate unique months with data
+        unique_months = six_months_df['date'].dt.strftime('%Y-%m').unique()
+        n_months = len(unique_months)
+        if n_months == 0:
+            n_months = 1
+            
+        # Compute total and average spend per category
+        category_sums = six_months_df.groupby('category')['amount'].sum().reset_index()
+        category_sums['monthly_average'] = category_sums['amount'] / n_months
+        
+        # Current month spend per category
+        current_month_spend = six_months_df[six_months_df['date'] == target_date].groupby('category')['amount'].sum().reset_index()
+        current_month_spend = current_month_spend.rename(columns={'amount': 'current_month_amount'})
+        
+        # Merge current month spend
+        category_sums = pd.merge(category_sums, current_month_spend, on='category', how='left')
+        category_sums['current_month_amount'] = category_sums['current_month_amount'].fillna(0.0)
+        
+        # Sort categories by average spend (descending)
+        category_sums = category_sums.sort_values(by='monthly_average', ascending=False)
+        
+        # 1. Generate Horizontal Bar Chart for 6-Month Averages
+        fig = px.bar(
+            category_sums,
+            x='monthly_average',
+            y='category',
+            orientation='h',
+            text=category_sums['monthly_average'].apply(lambda x: f'${x:,.2f}'),
+            title=f'Average Monthly Spend by Category (Last {n_months} Months with Data)',
+            labels={'monthly_average': 'Average Monthly Spend ($)', 'category': 'Category'},
+            color='category'
+        )
+        # Sort y axis visually
+        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+        fig.update_traces(textposition='inside', textfont_size=8)
+        
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            fig.write_image(tmp.name, scale=4)
+            pdf.image(tmp.name, w=180)
+            os.unlink(tmp.name)
+            
+        pdf.ln(10)
+        
+        # 2. Summary Table of Averages
+        pdf.set_font('helvetica', 'B', 10)
+        pdf.cell(0, 8, "Summary Table (Last 6 Months)", ln=True)
+        pdf.ln(2)
+        
+        # Table Header
+        pdf.set_font('helvetica', 'B', 9)
+        col_widths = [50, 40, 45, 45] # Category, Current Month, n-Month Total, Monthly Average
+        headers = ['Category', 'Current Month Spend', f'{n_months}-Month Total Spend', 'Monthly Average Spend']
+        
+        for width, header in zip(col_widths, headers):
+            pdf.cell(width, 7, header, border=1, align='C')
+        pdf.ln()
+        
+        # Table Rows
+        pdf.set_font('helvetica', '', 9)
+        for _, row in category_sums.iterrows():
+            cat_name = str(row['category'])
+            current_val = f"${row['current_month_amount']:.2f}"
+            total_val = f"${row['amount']:.2f}"
+            avg_val = f"${row['monthly_average']:.2f}"
+            
+            pdf.cell(col_widths[0], 6, cat_name, border=1)
+            pdf.cell(col_widths[1], 6, current_val, border=1, align='R')
+            pdf.cell(col_widths[2], 6, total_val, border=1, align='R')
+            pdf.cell(col_widths[3], 6, avg_val, border=1, align='R')
+            pdf.ln()
+            
+        # Total Row
+        pdf.set_font('helvetica', 'B', 9)
+        grand_current = category_sums['current_month_amount'].sum()
+        grand_total = category_sums['amount'].sum()
+        grand_average = category_sums['monthly_average'].sum()
+        
+        pdf.cell(col_widths[0], 6, 'Total', border=1)
+        pdf.cell(col_widths[1], 6, f"${grand_current:.2f}", border=1, align='R')
+        pdf.cell(col_widths[2], 6, f"${grand_total:.2f}", border=1, align='R')
+        pdf.cell(col_widths[3], 6, f"${grand_average:.2f}", border=1, align='R')
+        pdf.ln()
 
 
